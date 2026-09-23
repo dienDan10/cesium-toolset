@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+.cesium-widget-credits {
+    display: none !important;
+}
+
+.measurements-scrollbar {
+    scrollbar-color: rgb(82 82 82) transparent;
+    scrollbar-width: thin;
+}
+
+.measurements-scrollbar::-webkit-scrollbar {
+    width: 5px;
+}
+
+.measurements-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.measurements-scrollbar::-webkit-scrollbar-thumb {
+    border: 1px solid rgb(10 10 10 / 80%);
+    border-radius: 999px;
+    background: rgb(82 82 82);
+}
+
+.measurements-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgb(217 119 6);
+}
