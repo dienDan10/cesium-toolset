@@ -1,5 +1,6 @@
 import { DistanceMeasure } from '@cesium-extends/measure';
 import { cartesian3FromCartographic, makeHeightSampler } from './MeasureUtils';
+import { DISTANCE_SAMPLE_POINT } from './MeasureConstants';
 
 /**
  * Khoảng cách bám đất — chia đều N điểm dọc geodesic thật giữa start/end
@@ -9,7 +10,7 @@ import { cartesian3FromCartographic, makeHeightSampler } from './MeasureUtils';
 export class DistanceSurfaceMeasureV2 extends DistanceMeasure {
     constructor(viewer, options = {}) {
         super(viewer, options);
-        this._splitNumV2 = options.splitNum ?? 100;
+        this._splitNumV2 = options.splitNum ?? DISTANCE_SAMPLE_POINT;
         this._sampleHeight = makeHeightSampler(viewer);
     }
 

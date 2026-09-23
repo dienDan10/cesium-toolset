@@ -13,6 +13,7 @@ import {
 import { logger } from '../../utils/logger';
 import { getViewer } from '../../cesium/init/viewer';
 import {
+    AREA_SAMPLE_CELL,
     SURFACE_OPTION_FLAT,
     SURFACE_OPTION_GROUND,
     TYPE_OPTION_AREA,
@@ -110,7 +111,9 @@ export function useMeasureToolbar() {
                         );
                         if (hierarchy?.positions?.length >= 3) {
                             finalLabel = formatAreaText(
-                                instance.getArea(hierarchy.positions, { maxCells: 100 }),
+                                instance.getArea(hierarchy.positions, {
+                                    maxCells: AREA_SAMPLE_CELL,
+                                }),
                             );
                         }
                     }
@@ -140,6 +143,14 @@ export function useMeasureToolbar() {
             // closure của lần render này — cần biết giá trị MỚI NHẤT tại
             // đúng lúc cleanup chạy, không phải giá trị lúc effect này
             // được tạo ra.
+
+            // GIẢ ĐỊNH VÒNG ĐỜI: MeasureToolbar chỉ bị unmount qua setting showMeasure
+            // (đổi mode = reload app). Khi đó store đã là false lúc cleanup chạy nên
+            // nhánh dưới huỷ hết phép đo. Nếu sau này component có thể unmount khi
+            // showMeasure vẫn bật (render có điều kiện theo mode/panel/route), các
+            // instance trong `measurements` sẽ mất tham chiếu -> entity, LabelCollection,
+            // MouseTooltip còn lại trên viewer mà không xoá được. Lúc đó cần thêm
+            // cleanup lúc unmount hoặc chuyển `measurements` ra store ngoài React.
             const stillOn = useUiSettingsStore.getState().values.showMeasure;
             if (!stillOn) {
                 setMeasurements((prev) => {

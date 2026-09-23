@@ -3,6 +3,7 @@ import { polygon } from '@turf/helpers';
 import intersect from '@turf/intersect';
 import { makeHeightSampler } from './MeasureUtils';
 import { logger } from '../../utils/logger';
+import { AREA_SAMPLE_CELL } from './MeasureConstants';
 
 // Xấp xỉ — CHỈ dùng để quy đổi kích thước ô lưới (mét -> độ). Không tham
 // gia vào phép tính diện tích, nên sai lệch nhỏ ở đây chỉ làm ô to/nhỏ hơn
@@ -234,7 +235,7 @@ export class AreaSurfaceMeasureV2 extends AreaMeasure {
     constructor(viewer, options = {}) {
         super(viewer, options);
         this._cellSizeM = options.cellSizeM ?? 30;
-        this._maxCells = options.maxCells ?? 100;
+        this._maxCells = options.maxCells ?? AREA_SAMPLE_CELL;
         this._sampleHeight = makeHeightSampler(viewer);
     }
 

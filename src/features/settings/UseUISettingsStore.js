@@ -1,6 +1,6 @@
 // useUiSettingsStore.js
 import { create } from 'zustand';
-import { settingsSchema, getDefaultValues } from './SettingsSchema';
+import { getDefaultValues } from './SettingsSchema';
 
 export const useUiSettingsStore = create((set, get) => ({
     values: getDefaultValues(),
@@ -18,8 +18,8 @@ export const useUiSettingsStore = create((set, get) => ({
     // Nếu sau này schema thêm item mới, các user cũ đã có localStorage
     // cũ sẽ thiếu key -> gọi hàm này để vá thêm default còn thiếu,
     // không ghi đè giá trị người dùng đã chỉnh.
-    hydrateMissingDefaults: () =>
-        set((state) => ({
-            values: { ...getDefaultValues(settingsSchema), ...state.values },
-        })),
+    // hydrateMissingDefaults: () =>
+    //     set((state) => ({
+    //         values: { ...getDefaultValues(settingsSchema), ...state.values },
+    //     })),
 }));
