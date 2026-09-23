@@ -25,6 +25,26 @@ export const settingsSchema = [
                 type: 'toggle',
                 default: true,
             },
+            {
+                // tắt = chỉ hiện popup của entity đang hover (POPUP_MODE_HOVER)
+                // bật = hiện popup của mọi entity (POPUP_MODE_ALL)
+                id: 'showAllPopups',
+                label: 'Hiện tất cả popup',
+                icon: 'tooltip',
+                type: 'toggle',
+                default: false,
+            },
+            {
+                id: 'mouseCoordFormat',
+                label: 'Định dạng toạ độ',
+                icon: 'compass',
+                type: 'choice',
+                default: 'dms',
+                choices: [
+                    { value: 'decimal', label: 'Độ thập phân' },
+                    { value: 'dms', label: 'Độ-phút-giây' },
+                ],
+            },
         ],
     },
     {
