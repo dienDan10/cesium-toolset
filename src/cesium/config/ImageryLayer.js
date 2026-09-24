@@ -15,7 +15,7 @@ export function setImageryProvider(viewer, imagery_server_url) {
         viewer.imageryLayers.addImageryProvider(
             new Cesium.UrlTemplateImageryProvider({
                 url: imagery_server_url,
-                maximumLevel: 20,
+                maximumLevel: 18,
             }),
         );
     } catch (e) {

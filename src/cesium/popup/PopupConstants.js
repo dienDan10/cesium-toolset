@@ -6,7 +6,7 @@ export const POPUP_MODE_ALL = 'all'; // hiện popup của mọi entity, không 
 // Nếu chuột quay lại đúng entity đó trong khoảng này thì popup giữ nguyên
 // (chống nhấp nháy khi chuột lướt qua mép entity).
 // Đặt 0 = chuột ra là ẩn ngay, không chờ.
-export const POPUP_HOVER_HIDE_DELAY_MS = 1000;
+export const POPUP_HOVER_HIDE_DELAY_MS = 0;
 
 // Chu kỳ (ms) gọi entity.popup.update() cho popup đang hiện.
 // 250 ms = 4 lần/giây — đủ mượt cho số liệu realtime (tốc độ, độ cao...)
@@ -23,3 +23,9 @@ export const POPUP_OFFSET_Y_PX = -12;
 // Infinity = không giới hạn. Hữu ích ở chế độ "hiện hết" khi zoom xa,
 // tránh hàng trăm popup chồng lên nhau.
 export const POPUP_MAX_DISTANCE_M = Infinity;
+
+// Chu kỳ (ms) lấy lại độ cao terrain cho entity CLAMP/RELATIVE_TO_GROUND.
+// Giữa 2 lần lấy, popup dùng lon/lat mới nhất + độ cao đã cache (xe 20 m/s
+// đi 5 m trong 250 ms -> sai độ cao cỡ 1-2 m trên dốc, dưới 1 px màn hình).
+// Lấy lại định kỳ còn để độ cao tự chính xác dần khi Cesium tải tile chi tiết hơn.
+export const POPUP_GROUND_SAMPLE_INTERVAL_MS = 250;

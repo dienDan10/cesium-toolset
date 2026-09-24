@@ -2,33 +2,48 @@
  * Entity giả để test PopupLayer trên demo. KHÔNG mang sang project chính.
  *
  * Sinh ra đủ các loại entity mà PopupLayer phải xử lý:
- *   - tĩnh          : popup chỉ có create(), nội dung cố định
- *   - di chuyển     : bay vòng tròn, popup có update() hiện tốc độ/hướng realtime
- *   - ghép          : entity gốc + marker phụ (popupOwnerId) — hover marker
- *                     phải hiện popup của entity gốc
- *   - không popup   : hover vào phải coi như khoảng trống
+ *   - air          : bay vòng tròn ở độ cao cố định, popup update() realtime
+ *   - ground       : xe chạy vòng tròn, CLAMP_TO_GROUND, popup update() realtime
+ *   - groundStatic : đứng yên, CLAMP_TO_GROUND
+ *   - relative     : đứng yên, RELATIVE_TO_GROUND (+300 m so với mặt đất)
+ *   - composite    : entity gốc + marker phụ (popupOwnerId), cả 2 CLAMP_TO_GROUND —
+ *                    hover marker phải hiện popup của entity gốc
+ *   - static       : đứng yên ở độ cao cố định, popup chỉ có create()
+ *   - noPopup      : hover vào phải coi như khoảng trống
  * Và định kỳ xoá / thêm entity (mô phỏng DROP), thỉnh thoảng tạo lại đúng
  * id cũ — để test collectionChanged và trường hợp "cùng id, khác object".
  *
- * LƯU Ý: entity đặt ở độ cao cố định (mặc định 2000 m), KHÔNG clamp xuống
- * terrain. Popup neo theo entity.position; nếu entity dùng CLAMP_TO_GROUND
- * thì điểm vẽ thật (trên mặt núi) khác entity.position (độ cao gốc) -> popup
- * sẽ lệch khỏi icon khi nhìn nghiêng. Demo tránh vấn đề đó để test phần lõi.
+ * Entity clamp có entity.position ở độ cao 0 (giống project chính: tạo bằng
+ * fromDegrees(lon, lat)) trong khi Cesium vẽ trên mặt terrain -> dùng để
+ * kiểm tra popup có neo đúng trên icon khi nhìn nghiêng vào núi không.
+ * Tâm mặc định [105.3, 21.0] là vùng đồi núi Ba Vì – Hoà Bình.
  */
 
 const KM_PER_DEG_LAT = 111.32;
 
-// tỉ lệ các loại entity (phần còn lại là entity tĩnh)
-const RATIO_MOVING = 0.6;
-const RATIO_COMPOSITE = 0.1;
-const RATIO_NO_POPUP = 0.05;
+// tỉ lệ các loại entity (phần còn lại là 'static')
+const KIND_RATIOS = [
+    ['air', 0.35],
+    ['ground', 0.2],
+    ['groundStatic', 0.15],
+    ['composite', 0.1],
+    ['relative', 0.05],
+    ['noPopup', 0.05],
+];
 
 const KIND_COLORS = {
-    static: Cesium.Color.fromCssColorString('#38bdf8'), // xanh dương
-    moving: Cesium.Color.fromCssColorString('#f59e0b'), // hổ phách
-    composite: Cesium.Color.fromCssColorString('#a78bfa'), // tím
-    noPopup: Cesium.Color.fromCssColorString('#737373'), // xám
+    air: '#f59e0b', // hổ phách
+    ground: '#4ade80', // xanh lá
+    groundStatic: '#16a34a', // xanh lá đậm
+    relative: '#f472b6', // hồng
+    composite: '#a78bfa', // tím
+    static: '#38bdf8', // xanh dương
+    noPopup: '#737373', // xám
 };
+
+const CLAMP = Cesium.HeightReference.CLAMP_TO_GROUND;
+const RELATIVE = Cesium.HeightReference.RELATIVE_TO_GROUND;
+const RELATIVE_HEIGHT_M = 300;
 
 /**
  * @param {Cesium.Viewer} viewer
@@ -36,13 +51,13 @@ const KIND_COLORS = {
  * @param {number} [options.count=300]           số entity (không tính marker phụ)
  * @param {number[]} [options.center]            [lon, lat] tâm vùng rải entity
  * @param {number} [options.spreadKm=60]         bán kính vùng rải (km)
- * @param {number} [options.height=2000]         độ cao entity (m)
+ * @param {number} [options.airHeight=2000]      độ cao entity bay / tĩnh không clamp (m)
  * @param {number} [options.churnMs=3000]        chu kỳ xoá/thêm entity (ms), 0 = tắt
  * @returns {{ destroy: () => void }}
  */
 export function spawnFakeEntities(
     viewer,
-    { count = 300, center = [105.3, 21.0], spreadKm = 60, height = 2000, churnMs = 3000 } = {},
+    { count = 300, center = [105.3, 21.0], spreadKm = 60, airHeight = 2000, churnMs = 3000 } = {},
 ) {
     const epoch = viewer.clock.currentTime.clone();
     const markerImage = createMarkerImage();
@@ -50,104 +65,151 @@ export function spawnFakeEntities(
     const groups = new Map();
     let seq = 0;
 
+    const kmToDegLon = (km, lat) => km / (KM_PER_DEG_LAT * Math.cos(Cesium.Math.toRadians(lat)));
+
     const randomPoint = () => {
         const r = Math.sqrt(Math.random()) * spreadKm; // sqrt -> rải đều theo diện tích
         const a = Math.random() * Math.PI * 2;
-        const dLat = (r * Math.sin(a)) / KM_PER_DEG_LAT;
-        const dLon =
-            (r * Math.cos(a)) / (KM_PER_DEG_LAT * Math.cos(Cesium.Math.toRadians(center[1])));
-        return [center[0] + dLon, center[1] + dLat];
+        return [
+            center[0] + kmToDegLon(r * Math.cos(a), center[1]),
+            center[1] + (r * Math.sin(a)) / KM_PER_DEG_LAT,
+        ];
     };
 
     const pickKind = () => {
-        const x = Math.random();
-        if (x < RATIO_NO_POPUP) return 'noPopup';
-        if (x < RATIO_NO_POPUP + RATIO_COMPOSITE) return 'composite';
-        if (x < RATIO_NO_POPUP + RATIO_COMPOSITE + RATIO_MOVING) return 'moving';
+        let x = Math.random();
+        for (const [kind, ratio] of KIND_RATIOS) {
+            if (x < ratio) return kind;
+            x -= ratio;
+        }
         return 'static';
     };
+
+    const makePoint = (kind, heightReference) => ({
+        pixelSize: 9,
+        color: Cesium.Color.fromCssColorString(KIND_COLORS[kind]),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 1,
+        heightReference,
+        // icon trên mặt đất không bị terrain che/nhấp nháy (thường gặp với point clamp)
+        disableDepthTestDistance: heightReference ? Number.POSITIVE_INFINITY : undefined,
+    });
+
+    /** Position chạy vòng tròn quanh (lon, lat); cập nhật demo.headingDeg theo hướng chạy. */
+    function circularPosition(lon, lat, height, radiusKm, demo) {
+        const phase0 = Math.random() * Math.PI * 2;
+        const scratch = new Cesium.Cartesian3();
+        return new Cesium.CallbackProperty((time, result) => {
+            const t = Cesium.JulianDate.secondsDifference(time, epoch);
+            const phase = phase0 + (demo.speedKmh / 3600 / radiusKm) * t; // omega = v / r (rad/s)
+            // chạy ngược chiều kim đồng hồ: vận tốc ∝ (-sin φ, cos φ) theo
+            // (Đông, Bắc) -> hướng la bàn = atan2(-sin φ, cos φ) = -φ
+            demo.headingDeg = ((-Cesium.Math.toDegrees(phase) % 360) + 360) % 360;
+            return Cesium.Cartesian3.fromDegrees(
+                lon + kmToDegLon(radiusKm * Math.cos(phase), lat),
+                lat + (radiusKm * Math.sin(phase)) / KM_PER_DEG_LAT,
+                height,
+                Cesium.Ellipsoid.WGS84,
+                result ?? scratch,
+            );
+        }, false);
+    }
 
     function addEntity(id = `demo-${seq++}`, kind = pickKind()) {
         const [lon, lat] = randomPoint();
         const name = `${kind.toUpperCase()} ${id.replace('demo-', '#')}`;
-        const point = {
-            pixelSize: 9,
-            color: KIND_COLORS[kind],
-            outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 1,
-        };
 
-        if (kind === 'moving') {
-            // bay vòng tròn bán kính 2–8 km, tốc độ 150–600 km/h
-            const radiusKm = 2 + Math.random() * 6;
-            const demo = { speedKmh: 150 + Math.random() * 450, headingDeg: 0 };
-            const phase0 = Math.random() * Math.PI * 2;
-            const scratch = new Cesium.Cartesian3();
+        switch (kind) {
+            case 'air':
+            case 'ground': {
+                // air: bay 150–600 km/h, vòng 2–8 km; ground: chạy 20–80 km/h, vòng 0,5–2 km
+                const isAir = kind === 'air';
+                const demo = {
+                    speedKmh: isAir ? 150 + Math.random() * 450 : 20 + Math.random() * 60,
+                    minSpeedKmh: isAir ? 100 : 10,
+                    headingDeg: 0,
+                };
+                const radiusKm = isAir ? 2 + Math.random() * 6 : 0.5 + Math.random() * 1.5;
+                viewer.entities.add({
+                    id,
+                    name,
+                    demo, // dữ liệu "realtime" — bộ mô phỏng WebSocket bên dưới sửa định kỳ
+                    position: circularPosition(lon, lat, isAir ? airHeight : 0, radiusKm, demo),
+                    point: makePoint(kind, isAir ? undefined : CLAMP),
+                    popup: createMovingPopup(
+                        name,
+                        isAir ? 'Bay — độ cao cố định' : 'Mặt đất — CLAMP',
+                    ),
+                });
+                groups.set(id, [id]);
+                return;
+            }
 
-            viewer.entities.add({
-                id,
-                name,
-                point,
-                demo, // dữ liệu "realtime" — bộ mô phỏng WebSocket bên dưới sửa định kỳ
-                position: new Cesium.CallbackProperty((time, result) => {
-                    const t = Cesium.JulianDate.secondsDifference(time, epoch);
-                    const omega = demo.speedKmh / 3600 / radiusKm; // rad/s
-                    const phase = phase0 + omega * t;
-                    // bay ngược chiều kim đồng hồ: vận tốc ∝ (-sin φ, cos φ) theo
-                    // (Đông, Bắc) -> hướng la bàn = atan2(-sin φ, cos φ) = -φ
-                    demo.headingDeg = ((-Cesium.Math.toDegrees(phase) % 360) + 360) % 360;
-                    const dLat = (radiusKm * Math.sin(phase)) / KM_PER_DEG_LAT;
-                    const dLon =
-                        (radiusKm * Math.cos(phase)) /
-                        (KM_PER_DEG_LAT * Math.cos(Cesium.Math.toRadians(lat)));
-                    return Cesium.Cartesian3.fromDegrees(
-                        lon + dLon,
-                        lat + dLat,
-                        height,
-                        Cesium.Ellipsoid.WGS84,
-                        result ?? scratch,
-                    );
-                }, false),
-                popup: createMovingPopup(name),
-            });
-            groups.set(id, [id]);
-            return;
+            case 'composite': {
+                const markerId = `${id}-marker`;
+                const position = Cesium.Cartesian3.fromDegrees(lon, lat); // độ cao 0, clamp
+                viewer.entities.add({
+                    id,
+                    name,
+                    position,
+                    point: makePoint(kind, CLAMP),
+                    popup: createStaticPopup(name, 'Entity ghép — gốc, CLAMP'),
+                });
+                // marker phụ: KHÔNG có popup, trỏ về entity gốc qua popupOwnerId
+                viewer.entities.add({
+                    id: markerId,
+                    position,
+                    popupOwnerId: id,
+                    billboard: {
+                        image: markerImage,
+                        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                        pixelOffset: new Cesium.Cartesian2(0, -8),
+                        heightReference: CLAMP,
+                        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    },
+                });
+                groups.set(id, [id, markerId]);
+                return;
+            }
+
+            case 'groundStatic':
+            case 'relative': {
+                const isRelative = kind === 'relative';
+                viewer.entities.add({
+                    id,
+                    name,
+                    position: Cesium.Cartesian3.fromDegrees(
+                        lon,
+                        lat,
+                        isRelative ? RELATIVE_HEIGHT_M : 0,
+                    ),
+                    point: makePoint(kind, isRelative ? RELATIVE : CLAMP),
+                    popup: createStaticPopup(
+                        name,
+                        isRelative
+                            ? `RELATIVE — +${RELATIVE_HEIGHT_M} m so với mặt đất`
+                            : 'Mặt đất — CLAMP',
+                    ),
+                });
+                groups.set(id, [id]);
+                return;
+            }
+
+            default: {
+                // 'static' | 'noPopup' — độ cao cố định, không clamp
+                viewer.entities.add({
+                    id,
+                    name,
+                    position: Cesium.Cartesian3.fromDegrees(lon, lat, airHeight),
+                    point: makePoint(kind),
+                    popup:
+                        kind === 'static'
+                            ? createStaticPopup(name, 'Tĩnh — độ cao cố định')
+                            : undefined,
+                });
+                groups.set(id, [id]);
+            }
         }
-
-        const position = Cesium.Cartesian3.fromDegrees(lon, lat, height);
-
-        if (kind === 'composite') {
-            const markerId = `${id}-marker`;
-            viewer.entities.add({
-                id,
-                name,
-                position,
-                point,
-                popup: createStaticPopup(name, 'Entity ghép — gốc'),
-            });
-            // marker phụ: KHÔNG có popup, trỏ về entity gốc qua popupOwnerId
-            viewer.entities.add({
-                id: markerId,
-                position,
-                popupOwnerId: id,
-                billboard: {
-                    image: markerImage,
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, -8),
-                },
-            });
-            groups.set(id, [id, markerId]);
-            return;
-        }
-
-        viewer.entities.add({
-            id,
-            name,
-            position,
-            point,
-            popup: kind === 'static' ? createStaticPopup(name, 'Entity tĩnh') : undefined,
-        });
-        groups.set(id, [id]);
     }
 
     function removeGroup(id) {
@@ -171,11 +233,14 @@ export function spawnFakeEntities(
             addEntity(Math.random() < 1 / 3 ? victim : undefined);
         }, churnMs);
 
-    // mô phỏng dữ liệu WebSocket: tốc độ dao động nhẹ
+    // mô phỏng dữ liệu WebSocket: tốc độ dao động nhẹ (±5%)
     const dataTimer = setInterval(() => {
         for (const id of groups.keys()) {
             const demo = viewer.entities.getById(id)?.demo;
-            if (demo) demo.speedKmh = Math.max(100, demo.speedKmh + (Math.random() - 0.5) * 20);
+            if (demo) {
+                const jitter = (Math.random() - 0.5) * 0.1 * demo.speedKmh;
+                demo.speedKmh = Math.max(demo.minSpeedKmh, demo.speedKmh + jitter);
+            }
         }
     }, 500);
 
@@ -212,16 +277,18 @@ function createStaticPopup(name, note) {
     };
 }
 
-function createMovingPopup(name) {
+function createMovingPopup(name, note) {
     return {
         create() {
             const el = document.createElement('div');
             el.className = FRAME_CLASS;
             el.innerHTML = `
                 <div data-field="name" class="font-bold text-amber-400"></div>
+                <div data-field="note" class="text-neutral-500"></div>
                 <div class="text-neutral-400">Tốc độ: <span data-field="speed" class="text-amber-300"></span></div>
                 <div class="text-neutral-400">Hướng: <span data-field="heading" class="text-amber-300"></span></div>`;
             el.querySelector('[data-field="name"]').textContent = name;
+            el.querySelector('[data-field="note"]').textContent = note;
             return el;
         },
         update(el, entity) {
@@ -238,7 +305,7 @@ function createMarkerImage() {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#a78bfa';
+    ctx.fillStyle = KIND_COLORS.composite;
     ctx.strokeStyle = '#000';
     ctx.beginPath();
     ctx.moveTo(size / 2, size - 1);

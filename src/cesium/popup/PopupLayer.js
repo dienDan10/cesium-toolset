@@ -33,6 +33,7 @@
 import { logger } from '../../utils/logger';
 import { initMouseTracker } from '../interaction/MouseTracker';
 import {
+    POPUP_GROUND_SAMPLE_INTERVAL_MS,
     POPUP_HOVER_HIDE_DELAY_MS,
     POPUP_MAX_DISTANCE_M,
     POPUP_MODE_ALL,
@@ -41,12 +42,24 @@ import {
     POPUP_OFFSET_Y_PX,
     POPUP_UPDATE_INTERVAL_MS,
 } from './PopupConstants';
-import { isPopupEntity } from './PopupUtils';
+import { getHeightReference, isPopupEntity } from './PopupUtils';
 
 // Popup có điểm neo lệch khỏi mép màn hình trong khoảng này vẫn được vẽ,
 // để popup ở sát mép không bị tắt đột ngột khi vẫn còn nhìn thấy một phần.
-
 const SCREEN_MARGIN_PX = 50;
+
+// HeightReference: bản Cesium >= 1.116 có thêm *_TERRAIN / *_3D_TILE; bản cũ
+// chỉ có NONE / CLAMP_TO_GROUND / RELATIVE_TO_GROUND -> lọc giá trị undefined.
+// (Cesium có isHeightReferenceClamp/Relative nhưng không export ra namespace.)
+const HR = Cesium.HeightReference;
+const CLAMP_REFS = new Set(
+    [HR.CLAMP_TO_GROUND, HR.CLAMP_TO_TERRAIN, HR.CLAMP_TO_3D_TILE].filter((v) => v !== undefined),
+);
+const RELATIVE_REFS = new Set(
+    [HR.RELATIVE_TO_GROUND, HR.RELATIVE_TO_TERRAIN, HR.RELATIVE_TO_3D_TILE].filter(
+        (v) => v !== undefined,
+    ),
+);
 
 class PopupLayer {
     constructor(viewer) {
@@ -66,6 +79,8 @@ class PopupLayer {
         // dùng lại mỗi frame, tránh tạo object mới
         this._occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84);
         this._scratchPos = new Cesium.Cartesian3();
+        this._scratchAnchor = new Cesium.Cartesian3();
+        this._scratchCarto = new Cesium.Cartographic();
         this._scratchScreen = new Cesium.Cartesian2();
 
         // lớp phủ chứa mọi popup, nằm cùng container với canvas
@@ -268,6 +283,10 @@ class PopupLayer {
             lastY: NaN,
             lastUpdate: 0, // mốc performance.now() lần update() gần nhất
             updateFailed: false, // update() từng ném lỗi -> ngừng gọi
+            // neo theo terrain (entity CLAMP/RELATIVE_TO_GROUND)
+            heightRef: Cesium.HeightReference.NONE,
+            groundHeight: NaN, // độ cao terrain đã cache; NaN = chưa lấy được lần nào
+            groundSampledAt: 0, // mốc performance.now() lần lấy độ cao gần nhất
         };
         this._items.set(entity.id, item);
         return item;
@@ -281,6 +300,7 @@ class PopupLayer {
         item.culled = true;
         item.shell.style.visibility = 'hidden';
         item.lastX = item.lastY = NaN;
+        item.groundSampledAt = 0; // lấy lại độ cao terrain ngay ở frame đầu
 
         this._container.appendChild(item.shell);
         item.attached = true;
@@ -328,7 +348,7 @@ class PopupLayer {
 
         const viewer = this._viewer;
         const scene = viewer.scene;
-        const cameraPos = scene.camera.positionWC; // dùng wc vì muốn lấy tọa độ ECEF thật, ko bị ảnh hưởng bởi lookAt()
+        const cameraPos = scene.camera.positionWC;
         const time = viewer.clock.currentTime;
         const now = performance.now();
 
@@ -342,10 +362,8 @@ class PopupLayer {
         if (checkHorizon) this._occluder.cameraPosition = cameraPos;
 
         for (const item of this._attached) {
-            const screen = this._computeScreenPosition(item.entity, time, cameraPos, checkHorizon);
+            const screen = this._computeScreenPosition(item, time, now, cameraPos, checkHorizon);
 
-            // trường hợp tọa độ nằm ngoài vùng hiển thị, như kiểu một entity tồn tại
-            // với label ra ngoài camera vậy, tắt popup đi
             const offscreen =
                 !screen ||
                 screen.x < -SCREEN_MARGIN_PX ||
@@ -383,16 +401,18 @@ class PopupLayer {
     }
 
     /**
-     * Vị trí màn hình (px CSS, gốc = góc trên-trái canvas) của entity, hoặc
+     * Vị trí màn hình (px CSS, gốc = góc trên-trái canvas) của popup, hoặc
      * null nếu không nên hiện: entity đang ẩn, không có vị trí, quá xa, khuất
      * sau địa cầu, hoặc nằm sau camera.
      * Kết quả là object scratch dùng chung — đọc ngay, không giữ lại.
      */
-    _computeScreenPosition(entity, time, cameraPos, checkHorizon) {
+    _computeScreenPosition(item, time, now, cameraPos, checkHorizon) {
+        const { entity } = item;
         if (!entity.isShowing) return null;
 
-        const pos = entity.position?.getValue(time, this._scratchPos);
-        if (!pos) return null;
+        const rawPos = entity.position?.getValue(time, this._scratchPos);
+        if (!rawPos) return null;
+        const pos = this._resolveAnchor(item, rawPos, time, now);
 
         if (
             POPUP_MAX_DISTANCE_M !== Infinity &&
@@ -410,6 +430,56 @@ class PopupLayer {
                 pos,
                 this._scratchScreen,
             ) ?? null
+        );
+    }
+
+    /**
+     * Điểm neo popup trong không gian: entity.position, hoặc — nếu entity
+     * clamp/relative theo mặt đất — cùng lon/lat nhưng ở độ cao terrain
+     * (khớp chỗ Cesium thật sự vẽ icon).
+     * Trả `pos` (không clamp / chưa có độ cao) hoặc object scratch dùng chung.
+     */
+    _resolveAnchor(item, pos, time, now) {
+        const globe = this._viewer.scene.globe;
+        if (!globe) return pos;
+
+        // lấy lại heightReference + độ cao terrain theo nhịp, không phải mỗi frame
+        if (now - item.groundSampledAt >= POPUP_GROUND_SAMPLE_INTERVAL_MS) {
+            item.groundSampledAt = now;
+            item.heightRef = getHeightReference(item.entity, time);
+
+            if (CLAMP_REFS.has(item.heightRef) || RELATIVE_REFS.has(item.heightRef)) {
+                const carto = Cesium.Cartographic.fromCartesian(
+                    pos,
+                    Cesium.Ellipsoid.WGS84,
+                    this._scratchCarto,
+                );
+                const h = carto && globe.getHeight(carto);
+                // undefined = vùng đó chưa có tile -> giữ độ cao cache cũ
+                if (h !== undefined) item.groundHeight = h;
+            }
+        }
+
+        const isClamp = CLAMP_REFS.has(item.heightRef);
+        const isRelative = RELATIVE_REFS.has(item.heightRef);
+        // không clamp, hoặc chưa từng lấy được độ cao -> tạm dùng entity.position
+        if ((!isClamp && !isRelative) || Number.isNaN(item.groundHeight)) return pos;
+
+        // lon/lat MỚI NHẤT (entity có thể đang di chuyển) + độ cao terrain đã cache
+        const carto = Cesium.Cartographic.fromCartesian(
+            pos,
+            Cesium.Ellipsoid.WGS84,
+            this._scratchCarto,
+        );
+        if (!carto) return pos;
+        const height = isRelative ? item.groundHeight + carto.height : item.groundHeight;
+
+        return Cesium.Cartesian3.fromRadians(
+            carto.longitude,
+            carto.latitude,
+            height,
+            Cesium.Ellipsoid.WGS84,
+            this._scratchAnchor,
         );
     }
 }

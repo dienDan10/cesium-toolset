@@ -27,13 +27,16 @@ function App() {
             animation: false,
             timeline: false,
             fullscreenButton: false,
+            shouldAnimate: true,
+            maximumRenderTimeChange: Infinity,
         });
         // viewer.extend(Cesium.viewerPerformanceWatchdogMixin);
         // viewer.extend(Cesium.viewerCesiumInspectorMixin);
         // viewer.cesiumInspector.viewModel.performance = true;
+        viewer.scene.debugShowFramesPerSecond = true;
         viewer.imageryLayers.removeAll();
-        setImageryProvider(viewer, 'http://192.168.1.24:6868/bingmap/{z}/{x}/{y}.png');
-        setTerrainProvider(viewer, 'http://192.168.1.24:6868/terrain');
+        setImageryProvider(viewer, 'http://10.217.161.224:8889/contour/{z}/{x}/{y}.png');
+        setTerrainProvider(viewer, 'http://10.217.161.224:6868/terrain');
 
         // ── popup ──
         initMouseTracker(viewer);
